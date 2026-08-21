@@ -14,8 +14,10 @@ import time
 from typing import Any
 import uuid
 
+import meeting_triage
 
-MANIFEST_SCHEMA_VERSION = 1
+
+MANIFEST_SCHEMA_VERSION = 2
 RETENTION_SECONDS = 7 * 24 * 60 * 60
 TERMINAL_EVENTS = {"finalization_failed", "finalized_media_invalid", "capture_empty"}
 POSTPROCESS_EVENTS = {"postprocess_started", "postprocess_completed", "postprocess_failed"}
@@ -158,20 +160,31 @@ def _artifact(run_dir: Path, path: Path | None) -> str | None:
         return None
 
 
-def _title(minutes: Path | None) -> str | None:
+def _interpretation(minutes: Path | None) -> dict[str, Any] | None:
     if minutes is None:
         return None
     interpreted = minutes.with_name("interpret_output.json")
     try:
         value = json.loads(interpreted.read_text(encoding="utf-8"))
-        sections = value.get("sections") if isinstance(value, dict) else value
+        return value if isinstance(value, dict) else None
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _title(minutes: Path | None) -> str | None:
+    if minutes is None:
+        return None
+    value = _interpretation(minutes)
+    if value is not None:
+        meeting_title = value.get("meeting_title")
+        if isinstance(meeting_title, str) and meeting_title.strip():
+            return meeting_title.strip()
+        sections = value.get("sections")
         if isinstance(sections, list):
             for section in sections:
                 title = section.get("title") if isinstance(section, dict) else None
                 if isinstance(title, str) and title.strip():
                     return title.strip()
-    except (OSError, json.JSONDecodeError):
-        pass
     try:
         for line in minutes.read_text(encoding="utf-8").splitlines():
             if line.startswith("# "):
@@ -204,6 +217,26 @@ def atomic_json(path: Path, value: object) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def apply_triage(
+    manifest: dict[str, Any],
+    result: object,
+    *,
+    now: float | None = None,
+    preserve_override: bool = False,
+) -> None:
+    """Apply validated triage fields and maintain the test-window epoch."""
+    validated = meeting_triage.validate_result(result)
+    manifest.update(validated)
+    if not preserve_override:
+        manifest.pop("disposition_override", None)
+    if validated["disposition"] == "test":
+        current = manifest.get("disposition_flagged_at")
+        if not isinstance(current, str) or event_timestamp({"occurred_at": current}) is None:
+            manifest["disposition_flagged_at"] = iso_timestamp(time.time() if now is None else now)
+    else:
+        manifest["disposition_flagged_at"] = None
+
+
 def generate_manifest(
     run_dir: Path,
     *,
@@ -211,6 +244,7 @@ def generate_manifest(
     retention_started_at: str | None = None,
     media_deleted_at: str | None = None,
     vault_note: str | None = None,
+    vault_root: str | None = None,
 ) -> dict[str, Any]:
     run_dir = run_dir.resolve(strict=True)
     folded = fold_run(run_dir)
@@ -251,11 +285,34 @@ def generate_manifest(
         },
         "title": _title(minutes),
         "vault_note": vault_note if vault_note is not None else previous.get("vault_note"),
+        "vault_root": vault_root if vault_root is not None else previous.get("vault_root"),
         "retention_started_at": retention_started_at if retention_started_at is not None else previous.get("retention_started_at"),
         "media_deleted_at": media_deleted_at if media_deleted_at is not None else previous.get("media_deleted_at"),
     }
-    if all(key in previous for key in ("title", "disposition", "confidence", "reason")):
-        manifest.update({key: previous[key] for key in ("title", "disposition", "confidence", "reason")})
+    if previous.get("disposition_override") == "keep":
+        manifest["disposition_override"] = "keep"
+    result = None
+    if previous.get("disposition_override") == "keep" and all(
+        key in previous for key in meeting_triage.MANIFEST_KEYS
+    ):
+        try:
+            result = meeting_triage.validate_result({key: previous[key] for key in meeting_triage.MANIFEST_KEYS})
+        except ValueError:
+            pass
+    interpretation = _interpretation(minutes)
+    if result is None and interpretation is not None:
+        try:
+            result = meeting_triage.from_interpretation(interpretation)
+        except ValueError:
+            pass
+    if result is None and all(key in previous for key in meeting_triage.MANIFEST_KEYS):
+        try:
+            result = meeting_triage.validate_result({key: previous[key] for key in meeting_triage.MANIFEST_KEYS})
+        except ValueError:
+            pass
+    if result is not None:
+        manifest["disposition_flagged_at"] = previous.get("disposition_flagged_at")
+        apply_triage(manifest, result, preserve_override=True)
     atomic_json(run_dir / "manifest.json", manifest)
     return manifest
 
@@ -348,6 +405,10 @@ def repair_manifest(run_dir: Path) -> str:
             or not isinstance(previous.get("artifacts"), dict)
             or previous["artifacts"].get("minutes") != canonical
             or previous.get("media") != expected_media
+            or (
+                previous.get("disposition") == "test"
+                and event_timestamp({"occurred_at": previous.get("disposition_flagged_at")}) is None
+            )
         )
         if stale:
             generate_manifest(run_dir)
@@ -384,6 +445,10 @@ def maintain_run(run_dir: Path, *, now: float | None = None) -> str:
                 or not isinstance(previous.get("artifacts"), dict)
                 or previous["artifacts"].get("minutes") != canonical
                 or previous.get("media") != expected_media
+                or (
+                    previous.get("disposition") == "test"
+                    and event_timestamp({"occurred_at": previous.get("disposition_flagged_at")}) is None
+                )
             ):
                 generate_manifest(run_dir)
                 repaired = True

@@ -17,7 +17,7 @@ import tempfile
 from typing import Any, Iterator
 
 
-INDEX_SCHEMA_VERSION = 1
+INDEX_SCHEMA_VERSION = 2
 INDEX_FILENAME = "index.db"
 FINALIZATION_EVENTS = {
     "recording_finalized",
@@ -97,6 +97,9 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             duration_seconds REAL,
             state TEXT NOT NULL,
             title TEXT NOT NULL,
+            disposition TEXT,
+            confidence REAL,
+            reason TEXT,
             transcript_path TEXT,
             minutes_path TEXT,
             vault_note TEXT
@@ -257,6 +260,15 @@ def load_run(run_dir: Path) -> tuple[dict[str, Any], list[tuple[str, str]]] | No
     vault_note = manifest.get("vault_note")
     if not isinstance(vault_note, str):
         vault_note = None
+    disposition = manifest.get("disposition")
+    if disposition not in {"keep", "test"}:
+        disposition = None
+    confidence = manifest.get("confidence")
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+        confidence = None
+    reason = manifest.get("reason")
+    if not isinstance(reason, str):
+        reason = None
     metadata = {
         "run_id": run_dir.name,
         "run_path": str(run_dir.resolve()),
@@ -265,6 +277,9 @@ def load_run(run_dir: Path) -> tuple[dict[str, Any], list[tuple[str, str]]] | No
         "duration_seconds": duration,
         "state": _run_state(run_dir, manifest, finalization),
         "title": _title(manifest, minutes_text, run_dir.name),
+        "disposition": disposition,
+        "confidence": confidence,
+        "reason": reason,
         "transcript_path": str(transcript_path.resolve()) if transcript_path else None,
         "minutes_path": str(minutes_path.resolve()) if minutes_path else None,
         "vault_note": vault_note,
@@ -281,10 +296,10 @@ def _insert_run(connection: sqlite3.Connection, run_dir: Path) -> bool:
     connection.execute(
         """INSERT INTO runs(
                run_id, run_path, started_at, completed_at, duration_seconds, state,
-               title, transcript_path, minutes_path, vault_note
+               title, disposition, confidence, reason, transcript_path, minutes_path, vault_note
            ) VALUES (
                :run_id, :run_path, :started_at, :completed_at, :duration_seconds, :state,
-               :title, :transcript_path, :minutes_path, :vault_note
+               :title, :disposition, :confidence, :reason, :transcript_path, :minutes_path, :vault_note
            )""",
         metadata,
     )
@@ -387,6 +402,18 @@ def update_index_for_run(base_dir: Path, run_dir: Path) -> bool:
         inserted = False if is_active_run(run_dir) else _insert_run(connection, run_dir)
         connection.commit()
     return inserted
+
+
+def delete_index_run(base_dir: Path, run_id: str) -> None:
+    """Remove one run from the derived index in a durable transaction."""
+    base_dir = base_dir.expanduser().resolve()
+    index_path = ensure_index(base_dir)
+    with closing(sqlite3.connect(index_path)) as connection:
+        connection.execute("PRAGMA foreign_keys=ON")
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute("DELETE FROM documents_fts WHERE run_id = ?", (run_id,))
+        connection.execute("DELETE FROM runs WHERE run_id = ?", (run_id,))
+        connection.commit()
 
 
 def connect_index(base_dir: Path) -> sqlite3.Connection:

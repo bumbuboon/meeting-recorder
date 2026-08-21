@@ -52,6 +52,8 @@ Each run is written under `~/Movies/meeting-recordings/<timestamp>/`:
 
 The run bundles are the source of truth. `<base>/index.db` is a derived SQLite/FTS5 index and can always be rebuilt. Set `MEETING_RECORD_DIR` to override the default base (`~/Movies/meeting-recordings`). Set `MEETING_VAULT_DIR` to publish read-only-by-convention copies under `Meetings/YYYY/` in an Obsidian vault; the transcript remains only in the run bundle.
 
+The Luna minutes pass also assigns a meeting title and a `keep`/`test` disposition. Test runs are published with `status: trash_candidate`. Startup maintenance deletes the complete run bundle, its vault note and images, and its index entry seven days after `disposition_flagged_at`. Removing or changing that status in Obsidian before deletion cancels cleanup and changes the manifest disposition to `keep`.
+
 ## Search CLI
 
 The app bundles `mtg`, a Python-stdlib-only history CLI. Install a convenient symlink after building:

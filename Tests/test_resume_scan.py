@@ -113,6 +113,17 @@ class ResumeScanTest(unittest.TestCase):
         self.assertEqual(outcomes["locked"], "skip:locked")
         self.assertFalse((chunks / "postprocess.events.jsonl").exists())
 
+    def test_scan_does_not_classify_or_follow_up_a_deleted_trash_run(self) -> None:
+        run = self.make_run("expired-test", ("recording_finalized",), ("postprocess_completed",))
+        with mock.patch.object(scan_module.trash_cleanup, "cleanup_run", return_value="deleted"), \
+             mock.patch.object(scan_module.storage, "maintain_run") as maintain, \
+             mock.patch.object(scan_module.followups, "run_followups") as followups:
+            outcomes = scan_module.scan(self.base, self.fake_runner)
+
+        self.assertEqual(outcomes[run.name], "maintenance:trash_deleted")
+        maintain.assert_not_called()
+        followups.assert_not_called()
+
     def test_runner_wraps_postprocess_in_caffeinate_i(self) -> None:
         run = self.make_ready_run()
         minutes = run / "minutes/new/minutes.md"

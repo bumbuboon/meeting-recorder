@@ -60,6 +60,7 @@ class InterpretCodexTest(unittest.TestCase):
             printf '%s\\n' "$@" > {args_log!s}
             input=$(cat)
             grep -q 'roughly one section per 5 to 10 minutes' <<<"$input"
+            grep -q '機能検証だと自称' <<<"$input"
             count=0
             [ ! -f {attempts!s} ] || count=$(cat {attempts!s})
             count=$((count + 1))
@@ -71,7 +72,7 @@ class InterpretCodexTest(unittest.TestCase):
                 out="${{args[$((i + 1))]}}"
               fi
             done
-            printf '%s\\n' '{{"sections":[{{"title":"決定","timestamp":0,"capture_timestamp":5,"summary":"要約","bullets":["実行する"]}}]}}' > "$out"
+            printf '%s\\n' '{{"meeting_title":"新薬導入方針の検討","disposition":"keep","confidence":0.93,"reason":"導入条件を具体的に相談しています","sections":[{{"title":"決定","timestamp":0,"capture_timestamp":5,"summary":"要約","bullets":["実行する"]}}]}}' > "$out"
             """
         )
 
@@ -84,8 +85,14 @@ class InterpretCodexTest(unittest.TestCase):
         for expected in ("exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "-m", "gpt-5.6-luna", "-C", str(self.run_dir), "--output-schema", "-o", "-"):
             self.assertIn(expected, args)
         schema = Path(args[args.index("--output-schema") + 1])
-        self.assertEqual(json.loads(schema.read_text())["required"], ["sections"])
-        self.assertEqual(json.loads(self.output.read_text())["sections"][0]["capture_timestamp"], 5)
+        self.assertEqual(
+            set(json.loads(schema.read_text())["required"]),
+            {"meeting_title", "disposition", "confidence", "reason", "sections"},
+        )
+        output = json.loads(self.output.read_text())
+        self.assertEqual(output["sections"][0]["capture_timestamp"], 5)
+        self.assertEqual(output["meeting_title"], "新薬導入方針の検討")
+        self.assertEqual(output["disposition"], "keep")
 
     def test_invalid_schema_retries_then_fails_without_output(self) -> None:
         attempts = self.root / "attempts"

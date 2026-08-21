@@ -64,7 +64,12 @@ prompt = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding=\"utf-8\"))
 assert \"segments\" in prompt
 assert \"frame_selection\" in prompt
 assert \"frames\" not in prompt
-pathlib.Path(sys.argv[2]).write_text(json.dumps({\"sections\": [{
+pathlib.Path(sys.argv[2]).write_text(json.dumps({
+    \"meeting_title\": \"画面共有の確認\",
+    \"disposition\": \"keep\",
+    \"confidence\": 0.9,
+    \"reason\": \"実際の共有事項を確認しています\",
+    \"sections\": [{
     \"title\": \"共有\", \"timestamp\": 0, \"capture_timestamp\": 7,
     \"summary\": \"画面共有\", \"bullets\": [\"確認\"]
 }]}), encoding=\"utf-8\")
@@ -90,6 +95,9 @@ pathlib.Path(sys.argv[2]).write_text(json.dumps({\"sections\": [{
             run_dir = next(path for path in output.iterdir() if path.is_dir())
             prompt = json.loads((run_dir / "interpret_prompt.json").read_text(encoding="utf-8"))
             self.assertNotIn("frames", prompt)
+            interpretation = json.loads((run_dir / "interpret_output.json").read_text(encoding="utf-8"))
+            self.assertEqual(interpretation["meeting_title"], "画面共有の確認")
+            self.assertEqual(interpretation["disposition"], "keep")
             self.assertTrue((run_dir / "images/frame_0001.jpg").exists())
             self.assertIn("![frame_0001](images/frame_0001.jpg)", (run_dir / "minutes.md").read_text(encoding="utf-8"))
 

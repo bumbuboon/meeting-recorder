@@ -16,15 +16,14 @@ import tempfile
 from typing import Any
 
 import mtg_index
+import meeting_triage
 import obsidian_publish
 import run_storage
 
 
-TRIAGE_KEYS = ("title", "disposition", "confidence", "reason")
-MIN_LLM_CHARACTERS = 16
-TITLE_RE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff]")
+TRIAGE_KEYS = meeting_triage.MANIFEST_KEYS
+MIN_LLM_CHARACTERS = meeting_triage.MIN_LLM_CHARACTERS
 WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(#[^\]|]+)?(\|[^\]]+)?\]\]")
-GENERIC_TITLES = {"会議", "ミーティング", "打ち合わせ", "議事録", "テスト", "録音"}
 
 
 def validate_schema(path: Path) -> None:
@@ -99,40 +98,7 @@ def transcript_sample(segments: list[str]) -> str:
 
 
 def validate_result(value: object) -> dict[str, Any]:
-    if not isinstance(value, dict) or set(value) != set(TRIAGE_KEYS):
-        raise ValueError("triage result must contain exactly title, disposition, confidence, reason")
-    title = value["title"]
-    disposition = value["disposition"]
-    confidence = value["confidence"]
-    reason = value["reason"]
-    if (
-        not isinstance(title, str)
-        or title != title.strip()
-        or not title
-        or len(title) > 40
-        or "\n" in title
-        or not TITLE_RE.search(title)
-        or title in GENERIC_TITLES
-        or title.endswith(("。", "！", "？", ".", "!", "?"))
-    ):
-        raise ValueError("title must be a concrete, short Japanese phrase")
-    if disposition not in {"keep", "test"}:
-        raise ValueError("disposition must be keep or test")
-    if (
-        isinstance(confidence, bool)
-        or not isinstance(confidence, (int, float))
-        or not math.isfinite(float(confidence))
-        or not 0 <= float(confidence) <= 1
-    ):
-        raise ValueError("confidence must be a finite number from 0 through 1")
-    if not isinstance(reason, str) or reason != reason.strip() or not reason or len(reason) > 200 or "\n" in reason:
-        raise ValueError("reason must be one non-empty line of at most 200 characters")
-    return {
-        "title": title,
-        "disposition": disposition,
-        "confidence": float(confidence),
-        "reason": reason,
-    }
+    return meeting_triage.validate_result(value)
 
 
 def existing_result(manifest: dict[str, Any]) -> dict[str, Any] | None:
@@ -147,18 +113,10 @@ def existing_result(manifest: dict[str, Any]) -> dict[str, Any] | None:
 def classify(run_dir: Path, segments: list[str], *, codex: str, schema: Path) -> dict[str, Any]:
     sample = transcript_sample(segments)
     if len(re.sub(r"\s+", "", sample)) < MIN_LLM_CHARACTERS:
-        return {
-            "title": "文字起こし不十分な録音テスト",
-            "disposition": "test",
-            "confidence": 1.0,
-            "reason": "文字起こしが空、または判定に足りない極小内容です",
-        }
+        return meeting_triage.insufficient_transcript_result()
     prompt = f"""次の Meeting Recorder 文字起こしを整理してください。
-JSON Schema に厳密に従い、title は内容を表す具体的で短い日本語句（40文字以内）にしてください。
-挨拶だけ、動作確認、マイクや録音のテスト、文章の読み上げ、数十秒だけの内容は disposition=test です。
-録画・文字起こし・議事録生成の機能検証だと自称する内容は、議題や決定事項の形式を取っていても disposition=test です。
-実際の議題、相談、意思決定、共有事項など実会議の内容があれば disposition=keep です。
-confidence は 0 から 1、reason は改行なしの簡潔な日本語にしてください。
+JSON Schema に厳密に従ってください。
+{meeting_triage.CLASSIFICATION_INSTRUCTION.replace("meeting_title", "title")}
 
 文字起こし（冒頭と代表サンプル）:
 {sample}
@@ -322,9 +280,12 @@ def triage(base_dir: Path, *, vault: Path | None = None, codex: str = "codex", s
                 result = classify(run_dir, transcript_segments(run_dir, manifest), codex=codex, schema=schema_path)
             run_id = str(manifest.get("run_id") or run_dir.name)
             relative = reconcile_note(vault, run_id, result)
-            manifest.update(result)
+            run_storage.apply_triage(manifest, result)
+            manifest["manifest_schema_version"] = run_storage.MANIFEST_SCHEMA_VERSION
             if relative is not None:
                 manifest["vault_note"] = relative
+            if vault is not None:
+                manifest["vault_root"] = str(vault)
             run_storage.atomic_json(manifest_path, manifest)
             outcomes[run_dir.name] = {"status": "unchanged" if reused else "triaged", **result, "vault_note": relative}
         except Exception as error:

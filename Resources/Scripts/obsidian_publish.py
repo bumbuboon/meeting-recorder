@@ -92,6 +92,9 @@ def title_from_minutes(minutes_path: Path) -> str:
     interpreted = minutes_path.with_name("interpret_output.json")
     try:
         value = json.loads(interpreted.read_text(encoding="utf-8"))
+        meeting_title = value.get("meeting_title") if isinstance(value, dict) else None
+        if isinstance(meeting_title, str) and meeting_title.strip():
+            return slug_title(meeting_title)
         sections = value.get("sections") if isinstance(value, dict) else value
         if isinstance(sections, list):
             for section in sections:

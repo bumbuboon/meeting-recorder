@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -12,6 +13,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "Resources/Scripts/run_storage.py"
+sys.path.insert(0, str(MODULE_PATH.parent))
 SPEC = importlib.util.spec_from_file_location("run_storage_test", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 storage = importlib.util.module_from_spec(SPEC)
@@ -63,7 +65,7 @@ class RunStorageTest(unittest.TestCase):
     def test_manifest_uses_fold_and_separate_schema_version(self) -> None:
         minutes = self.completed_run()
         manifest = storage.generate_manifest(self.run, canonical_minutes=minutes)
-        self.assertEqual(manifest["manifest_schema_version"], 1)
+        self.assertEqual(manifest["manifest_schema_version"], 2)
         self.assertNotIn("schema_version", manifest)
         self.assertEqual(manifest["state"], "completed")
         self.assertEqual(manifest["run_id"], "run-uuid")
@@ -71,6 +73,34 @@ class RunStorageTest(unittest.TestCase):
         self.assertEqual(manifest["artifacts"]["transcript"], "chunks/transcript.json")
         self.assertEqual(manifest["title"], "Canonical title")
         self.assertEqual(manifest["duration_seconds"], 400.0)
+        self.assertNotIn("disposition", manifest)
+
+    def test_manifest_imports_pipeline_triage_and_preserves_flag_epoch(self) -> None:
+        minutes = self.completed_run()
+        minutes.with_name("interpret_output.json").write_text(
+            json.dumps(
+                {
+                    "meeting_title": "録音機能の最終動作確認",
+                    "disposition": "test",
+                    "confidence": 0.99,
+                    "reason": "録画と議事録生成の機能検証です",
+                    "sections": [],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        with mock.patch.object(storage.time, "time", return_value=10_000.0):
+            manifest = storage.generate_manifest(self.run, canonical_minutes=minutes)
+        flagged = manifest["disposition_flagged_at"]
+
+        self.assertEqual(manifest["title"], "録音機能の最終動作確認")
+        self.assertEqual(manifest["disposition"], "test")
+        self.assertEqual(manifest["confidence"], 0.99)
+        self.assertIsNotNone(flagged)
+        with mock.patch.object(storage.time, "time", return_value=20_000.0):
+            regenerated = storage.generate_manifest(self.run, canonical_minutes=minutes)
+        self.assertEqual(regenerated["disposition_flagged_at"], flagged)
 
     def test_manifest_regeneration_preserves_complete_triage_fields(self) -> None:
         minutes = self.completed_run()

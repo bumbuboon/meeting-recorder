@@ -36,6 +36,9 @@ import subprocess
 import sys
 import tempfile
 
+sys.path.insert(0, str(Path(sys.argv[3]).parent))
+import meeting_triage
+
 prompt_path = Path(sys.argv[1])
 output_path = Path(sys.argv[2])
 schema_path = Path(sys.argv[3])
@@ -56,12 +59,13 @@ except (OSError, json.JSONDecodeError) as error:
     raise SystemExit(65)
 
 instruction = """Create concise Japanese meeting minutes using only the supplied transcript JSON.
-Return only JSON matching the provided schema, with a top-level sections array.
+Return only JSON matching the provided schema, with top-level meeting_title, disposition, confidence, reason, and sections fields.
 Each section must contain title, timestamp, capture_timestamp, summary, and bullets.
 timestamp is the topic start in numeric seconds. capture_timestamp is a useful exact video second inferred only from transcript cues; do not assume OCR, images, or vision input.
 Choose screenshots near topic or screen/slide changes, demonstrations, important claims, decisions, and action items.
 Split at real topic boundaries and scale section count to meeting duration: roughly one section per 5 to 10 minutes (for 60 minutes, about 6 to 12), with more for rapid topic changes and fewer for one sustained topic.
-Do not invent facts absent from the transcript. Input JSON follows:\n"""
+Do not invent facts absent from the transcript.
+""" + meeting_triage.CLASSIFICATION_INSTRUCTION + "\nInput JSON follows:\n"
 request = instruction + json.dumps(prompt_data, ensure_ascii=False)
 
 def valid_sections(path: Path) -> bool:
@@ -69,7 +73,12 @@ def valid_sections(path: Path) -> bool:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
-    if not isinstance(data, dict) or set(data) != {"sections"}:
+    expected = {"meeting_title", "disposition", "confidence", "reason", "sections"}
+    if not isinstance(data, dict) or set(data) != expected:
+        return False
+    try:
+        meeting_triage.from_interpretation(data)
+    except ValueError:
         return False
     sections = data["sections"]
     if not isinstance(sections, list) or not sections:

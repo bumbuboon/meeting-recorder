@@ -82,6 +82,7 @@ def _execute_locked(run_dir: Path) -> dict[str, str]:
                         run_dir,
                         canonical_minutes=canonical,
                         vault_note=relative,
+                        vault_root=str(vault),
                     )
                     append_event(event_path, "publish_completed", vault_note=relative)
                     outcomes["publish"] = "completed"

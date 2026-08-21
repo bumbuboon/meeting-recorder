@@ -16,7 +16,7 @@ from typing import Any
 import mtg_index
 
 
-RUN_COLUMNS = "run_id, run_path, started_at, completed_at, duration_seconds, state, title, transcript_path, minutes_path, vault_note"
+RUN_COLUMNS = "run_id, run_path, started_at, completed_at, duration_seconds, state, title, disposition, confidence, reason, transcript_path, minutes_path, vault_note"
 
 
 def default_base_dir() -> Path:

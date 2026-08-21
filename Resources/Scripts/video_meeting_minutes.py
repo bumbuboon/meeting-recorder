@@ -375,13 +375,13 @@ def default_sections(segments: list[dict[str, Any]], frames: list[dict[str, Any]
     return sections
 
 
-def interpret_sections(command: str, prompt_path: Path, out_path: Path) -> list[dict[str, Any]]:
+def interpret_sections(command: str, prompt_path: Path, out_path: Path) -> dict[str, Any]:
     run_template(command, {"prompt": prompt_path, "out": out_path})
     data = json.loads(out_path.read_text(encoding="utf-8"))
-    sections = data.get("sections") if isinstance(data, dict) else data
+    sections = data.get("sections") if isinstance(data, dict) else None
     if not isinstance(sections, list):
-        raise ValueError("Interpretation output must be a JSON array or an object with sections")
-    return sections
+        raise ValueError("Interpretation output must be an object with sections")
+    return data
 
 
 def extract_response_text(data: dict[str, Any]) -> str:
@@ -586,7 +586,8 @@ def main() -> int:
         )
         try:
             if args.interpret_cmd:
-                sections = interpret_sections(args.interpret_cmd, prompt_path, interpreted_path)
+                interpretation = interpret_sections(args.interpret_cmd, prompt_path, interpreted_path)
+                sections = interpretation["sections"]
             else:
                 sections = interpret_openai(
                     args.openai_model,

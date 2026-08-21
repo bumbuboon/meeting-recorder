@@ -77,6 +77,9 @@ class MeetingIndexTest(unittest.TestCase):
                 "duration_seconds": 600,
                 "state": "completed",
                 "title": "索引テスト",
+                "disposition": "keep",
+                "confidence": 0.94,
+                "reason": "実会議の内容です",
                 "artifacts": {
                     "transcript": "transcript/transcript.json",
                     "minutes": "minutes/minutes.md",
@@ -108,6 +111,9 @@ class MeetingIndexTest(unittest.TestCase):
         self.assertIsInstance(json.loads(global_json.stdout), list)
         shown = json.loads(self.cli("show", "20260821-10", "--json").stdout)
         self.assertEqual(shown["title"], "索引テスト")
+        self.assertEqual(shown["disposition"], "keep")
+        self.assertEqual(shown["confidence"], 0.94)
+        self.assertEqual(shown["reason"], "実会議の内容です")
 
         searched = json.loads(self.cli("search", "日本語", "--json").stdout)
         self.assertEqual(searched["method"], "fts5_trigram")

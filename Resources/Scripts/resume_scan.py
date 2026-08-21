@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -13,6 +14,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import run_storage as storage
 import postprocess_followups as followups
+import trash_cleanup
 
 
 TERMINAL_EVENTS = {"finalization_failed", "finalized_media_invalid", "capture_empty"}
@@ -64,11 +66,22 @@ def notify_terminal(run_dir: Path, state: str) -> None:
     )
 
 
-def scan(base_dir: Path, runner_script: Path) -> dict[str, str]:
-    outcomes: dict[str, str] = {}
+def scan(base_dir: Path, runner_script: Path, *, vault: Path | None = None) -> dict[str, str]:
+    outcomes = trash_cleanup.cleanup_tombstones(base_dir, vault=vault)
     if not base_dir.is_dir():
         return outcomes
-    for run_dir in sorted((path for path in base_dir.iterdir() if path.is_dir() and path.name != ".state")):
+    for run_dir in sorted(
+        path for path in base_dir.iterdir()
+        if path.is_dir() and path.name != ".state" and not path.name.startswith(".")
+    ):
+        try:
+            trash = trash_cleanup.cleanup_run(run_dir, vault=vault)
+        except Exception as error:
+            outcomes[run_dir.name] = f"maintenance:trash_failed:{error}"
+            continue
+        if trash == "deleted":
+            outcomes[run_dir.name] = "maintenance:trash_deleted"
+            continue
         maintenance = storage.maintain_run(run_dir)
         classification = classify_run(run_dir)
         if classification == "skip:completed":
@@ -91,12 +104,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-dir", required=True, type=Path)
     parser.add_argument("--runner-script", type=Path, default=Path(__file__).with_name("postprocess_runner.py"))
+    parser.add_argument("--vault-dir", type=Path)
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    outcomes = scan(args.base_dir.expanduser().resolve(), args.runner_script.expanduser().resolve())
+    vault = args.vault_dir or (Path(value) if (value := os.environ.get("MEETING_VAULT_DIR")) else None)
+    outcomes = scan(
+        args.base_dir.expanduser().resolve(),
+        args.runner_script.expanduser().resolve(),
+        vault=vault.expanduser().resolve() if vault is not None else None,
+    )
     for name, outcome in outcomes.items():
         print(f"{name}\t{outcome}")
     return 0
