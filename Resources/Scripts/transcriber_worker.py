@@ -15,6 +15,9 @@ import time
 from typing import Any, Iterable
 import uuid
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import run_storage as storage
+
 
 READY_EVENTS = {"chunk_ready", "ready"}
 ATTEMPT_EVENTS = {"chunk_transcription_attempt", "transcription_attempt"}
@@ -312,6 +315,13 @@ def transcribe_chunk(
         temporary.unlink(missing_ok=True)
 
 
+def cleanup_succeeded_chunk_wav(run_dir: Path, event_path: Path, key: str) -> None:
+    try:
+        storage.cleanup_chunk_wav(run_dir, key)
+    except OSError as error:
+        append_event(event_path, "chunk_wav_cleanup_failed", chunk_id=key, error=str(error))
+
+
 def run_worker(
     run_dir: Path,
     transcribe_script: Path,
@@ -342,6 +352,8 @@ def run_worker(
             and valid_transcript(chunk_transcript_path(chunks_dir, key))
             for key in initial_recorder_state["ready"]
         ):
+            for key in initial_recorder_state["ready"]:
+                cleanup_succeeded_chunk_wav(run_dir, event_path, key)
             assemble(run_dir)
             return 0
         if not retry_failed and failed_path.exists() and any(
@@ -359,6 +371,7 @@ def run_worker(
                 state = worker_state.get(key, {"attempts": 0, "status": "pending"})
                 transcript_path = chunk_transcript_path(chunks_dir, key)
                 if state["status"] == "succeeded" and valid_transcript(transcript_path):
+                    cleanup_succeeded_chunk_wav(run_dir, event_path, key)
                     continue
                 if not retry_failed and (state["status"] == "failed" or state["attempts"] >= max_attempts):
                     if state["status"] != "failed":
@@ -391,6 +404,7 @@ def run_worker(
                             attempt=attempt,
                             transcript_path=str(transcript_path.relative_to(run_dir)),
                         )
+                        cleanup_succeeded_chunk_wav(run_dir, event_path, key)
                         break
                     append_event(
                         event_path,

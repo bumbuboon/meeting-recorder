@@ -68,7 +68,7 @@ def scan(base_dir: Path, runner_script: Path) -> dict[str, str]:
     if not base_dir.is_dir():
         return outcomes
     for run_dir in sorted((path for path in base_dir.iterdir() if path.is_dir() and path.name != ".state")):
-        maintenance = storage.repair_manifest(run_dir)
+        maintenance = storage.maintain_run(run_dir)
         classification = classify_run(run_dir)
         outcomes[run_dir.name] = maintenance if maintenance != "maintenance:ok" else classification
         if classification.startswith("terminal:"):

@@ -183,6 +183,7 @@ class WorkerRestartTest(unittest.TestCase):
         successes = [record for record in records if record["event"] == "chunk_transcription_succeeded"]
         self.assertEqual(attempts, [1, 2])
         self.assertEqual(len(successes), 1)
+        self.assertFalse((self.audio_chunks / "chunk_0000.wav").exists())
         self.assertEqual(
             json.loads((self.chunks / "transcript.json").read_text(encoding="utf-8")),
             {"segments": [{"start": 4.25, "end": 4.75, "text": "chunk_0000"}]},
@@ -254,6 +255,35 @@ class WorkerRestartTest(unittest.TestCase):
             )
         self.assertEqual(status, 1)
         self.assertEqual([call.args[0] for call in sleep.call_args_list], [1, 2])
+
+    def test_success_event_is_fsynced_before_chunk_wav_cleanup(self) -> None:
+        observed: list[str] = []
+        real_append = worker.append_event
+
+        def append(path: Path, event: str, **fields: object) -> None:
+            real_append(path, event, **fields)
+            if event == "chunk_transcription_succeeded":
+                observed.append("success_durable")
+
+        def cleanup(run_dir: Path, key: str) -> bool:
+            records = worker.read_jsonl(self.chunks / "worker.events.jsonl")
+            self.assertEqual(records[-1]["event"], "chunk_transcription_succeeded")
+            observed.append("cleanup")
+            return True
+
+        with mock.patch.object(worker, "append_event", side_effect=append), \
+             mock.patch.object(worker.storage, "cleanup_chunk_wav", side_effect=cleanup), \
+             mock.patch.dict(os.environ, self.environment(fail_first=False), clear=True):
+            status = worker.run_worker(
+                self.run_dir,
+                self.fake_transcriber,
+                timeout=3,
+                max_attempts=3,
+                backoff_base=0,
+                poll_interval=0.01,
+            )
+        self.assertEqual(status, 0)
+        self.assertEqual(observed, ["success_durable", "cleanup"])
 
 
 if __name__ == "__main__":

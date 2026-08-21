@@ -63,6 +63,7 @@ python3 "$ROOT/Tests/test_transcription_worker.py"
 python3 "$ROOT/Tests/test_rolling_minutes_worker.py"
 python3 "$ROOT/Tests/test_phase2_contract.py"
 python3 "$ROOT/Tests/test_resume_scan.py"
+python3 "$ROOT/Tests/test_run_storage.py"
 python3 "$ROOT/Tests/test_video_meeting_minutes.py"
 python3 "$ROOT/Tests/test_interpret_codex.py"
 
