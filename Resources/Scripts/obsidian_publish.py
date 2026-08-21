@@ -208,6 +208,7 @@ def render_note(
     date: dt.date,
     transcript: Path,
     now: dt.datetime,
+    disposition: str | None = None,
 ) -> str:
     rewritten_minutes = re.sub(
         r"\]\(images/(frame_\d{4}\.jpg)\)",
@@ -222,6 +223,8 @@ def render_note(
         f"source_run: {run_id}",
         f"updated: {now.astimezone().isoformat(timespec='seconds')}",
     ]
+    if disposition == "test":
+        fields.append("status: trash_candidate")
     fields.extend([
         "---",
         "",
@@ -284,6 +287,7 @@ def publish(
             date=started.date(),
             transcript=transcript,
             now=timestamp,
+            disposition=manifest.get("disposition") if isinstance(manifest.get("disposition"), str) else None,
         ),
     )
     return note.relative_to(vault).as_posix()

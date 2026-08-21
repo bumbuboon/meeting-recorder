@@ -72,6 +72,38 @@ class RunStorageTest(unittest.TestCase):
         self.assertEqual(manifest["title"], "Canonical title")
         self.assertEqual(manifest["duration_seconds"], 400.0)
 
+    def test_manifest_regeneration_preserves_complete_triage_fields(self) -> None:
+        minutes = self.completed_run()
+        storage.generate_manifest(self.run, canonical_minutes=minutes)
+        manifest = storage.read_manifest(self.run)
+        manifest.update(
+            title="診療方針の確認",
+            disposition="keep",
+            confidence=0.9,
+            reason="診療方針を具体的に相談しています",
+        )
+        storage.atomic_json(self.run / "manifest.json", manifest)
+
+        regenerated = storage.generate_manifest(self.run, canonical_minutes=minutes)
+
+        self.assertEqual(
+            {key: regenerated[key] for key in ("title", "disposition", "confidence", "reason")},
+            {
+                "title": "診療方針の確認",
+                "disposition": "keep",
+                "confidence": 0.9,
+                "reason": "診療方針を具体的に相談しています",
+            },
+        )
+
+    def test_partial_triage_does_not_override_generated_title(self) -> None:
+        minutes = self.completed_run()
+        storage.atomic_json(self.run / "manifest.json", {"title": "古い仮題", "disposition": "keep"})
+
+        regenerated = storage.generate_manifest(self.run, canonical_minutes=minutes)
+
+        self.assertEqual(regenerated["title"], "Canonical title")
+
     def test_fold_falls_back_to_lifecycle_when_chunk_log_has_no_state(self) -> None:
         write_jsonl(
             self.run / "events.jsonl",

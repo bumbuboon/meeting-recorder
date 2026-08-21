@@ -254,6 +254,8 @@ def generate_manifest(
         "retention_started_at": retention_started_at if retention_started_at is not None else previous.get("retention_started_at"),
         "media_deleted_at": media_deleted_at if media_deleted_at is not None else previous.get("media_deleted_at"),
     }
+    if all(key in previous for key in ("title", "disposition", "confidence", "reason")):
+        manifest.update({key: previous[key] for key in ("title", "disposition", "confidence", "reason")})
     atomic_json(run_dir / "manifest.json", manifest)
     return manifest
 

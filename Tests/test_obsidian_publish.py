@@ -118,6 +118,13 @@ class ObsidianPublishTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             publisher.publish(self.run, self.vault, self.manifest, self.minutes)
 
+    def test_test_disposition_is_rendered_as_trash_candidate(self) -> None:
+        self.manifest["disposition"] = "test"
+
+        relative = publisher.publish(self.run, self.vault, self.manifest, self.minutes)
+
+        self.assertIn("status: trash_candidate", (self.vault / relative).read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()
