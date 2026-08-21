@@ -1,0 +1,66 @@
+# Meeting Recorder
+
+A standalone macOS menu-bar meeting recorder with **live incremental transcription** and **LLM-generated minutes** — fully local capture, no cloud upload of your audio.
+
+macOS の独立メニューバー録画アプリです。画面・システム音声・マイクを録画しながら、**録画中に120秒チャンク単位でローカル文字起こし**を進め、停止後に LLM がスクリーンショット付きの議事録(Markdown)を生成します。
+
+## How it works
+
+```
+ScreenCaptureKit ──► raw.mp4 (screen + system audio + mic, finalized on stop)
+        │
+        └─► AudioChunker: 120s mono WAV chunks (bounded queue, isolated from the main writer)
+                 │
+                 ▼
+        transcriber worker: Kanary CLI per chunk → whisper-compatible transcript.json
+                 │                     (runs live, during the recording)
+                 ▼
+        post-process (caffeinate-wrapped): LLM interprets the transcript,
+        picks capture timestamps, extracts frames from raw.mp4,
+        writes minutes.md + images/ + SQLite
+```
+
+- **Transcription**: [Kanary](https://kanary.download) CLI (`kanary transcribe`), on-device. Chunking keeps every call short.
+- **Minutes**: `codex exec` (one-shot, read-only sandbox, JSON-schema-validated output). Falls back to rule-based sections if the LLM is unavailable.
+- **Durability**: append-only per-writer event logs (`recorder.events.jsonl`, `worker.events.jsonl`, `postprocess.events.jsonl`), atomic tmp→rename writes, an explicit stop handshake (`END` → `WORKER_DONE`), and a resume scan that retries interrupted post-processing on next launch.
+
+## Requirements
+
+- macOS 15+ (Apple Silicon), Screen & System Audio Recording permission
+- `kanary` CLI on PATH (bundled with the Kanary app; symlink `Kanary.app/Contents/Helpers/kanary` into `~/.local/bin`)
+- `ffmpeg`, `ffprobe`, `python3`
+- `codex` CLI (optional — minutes fall back to rule-based sections without it)
+
+## Build & install
+
+```bash
+./build-app.sh
+```
+
+Installs `Meeting Recorder.app` into `~/Applications`. Launching the app starts a recording; launching a second instance (`open -n`) stops it. Note: rebuilding re-signs the binary ad hoc, so macOS revokes the Screen Recording permission each time — toggle it off/on again in System Settings.
+
+## Output layout
+
+Each run is written under `~/Movies/meeting-recordings/<timestamp>/`:
+
+- `raw.mp4` — original three-track recording (never post-processed in place)
+- `audio-chunks/` — 120 s WAV chunks produced during recording
+- `chunks/` — per-chunk transcripts, merged `transcript.json`, event logs, handshake markers
+- `minutes/<run-id>/minutes.md` + `images/` — generated minutes with screenshots
+- `recorder.log`, `events.jsonl`, `minutes.log` — logs and structured events
+
+## Tests
+
+```bash
+./Tests/verify.sh
+```
+
+Builds the app and runs the full suite: transcription-adapter fixtures (including timeout and malformed-JSON cases), worker restart/idempotency, stop-handshake contract, resume scan, and interpret fallback tests.
+
+## Design docs
+
+The `docs/` directory contains the reviewed design plan (v3.2) and phase acceptance records, including the chunk-length measurements that led to 120 s chunks without overlap.
+
+## License
+
+MIT
