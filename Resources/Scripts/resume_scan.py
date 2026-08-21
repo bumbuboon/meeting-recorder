@@ -12,6 +12,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import run_storage as storage
+import postprocess_followups as followups
 
 
 TERMINAL_EVENTS = {"finalization_failed", "finalized_media_invalid", "capture_empty"}
@@ -70,6 +71,8 @@ def scan(base_dir: Path, runner_script: Path) -> dict[str, str]:
     for run_dir in sorted((path for path in base_dir.iterdir() if path.is_dir() and path.name != ".state")):
         maintenance = storage.maintain_run(run_dir)
         classification = classify_run(run_dir)
+        if classification == "skip:completed":
+            followups.run_followups(run_dir)
         outcomes[run_dir.name] = maintenance if maintenance != "maintenance:ok" else classification
         if classification.startswith("terminal:"):
             notify_terminal(run_dir, classification.removeprefix("terminal:"))

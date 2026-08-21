@@ -16,6 +16,7 @@ import uuid
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import transcriber_worker as transcription
 import run_storage as storage
+import postprocess_followups as followups
 
 
 def append_event(path: Path, event: str, **fields: object) -> None:
@@ -143,10 +144,14 @@ def run_postprocess(
                 append_event(event_path, "postprocess_failed", stage="canonical_minutes", message=str(error))
                 return 1
             append_event(event_path, "postprocess_completed", resume=resume, canonical_minutes=canonical)
+            manifest_ready = False
             try:
                 storage.generate_manifest(run_dir, canonical_minutes=run_dir / canonical)
+                manifest_ready = True
             except (OSError, ValueError) as error:
                 append_event(event_path, "manifest_failed", message=str(error))
+            if manifest_ready:
+                followups.run_followups(run_dir, lock_held=True)
         else:
             append_event(event_path, "postprocess_failed", stage="minutes", exit_code=status)
         return status
