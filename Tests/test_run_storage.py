@@ -216,6 +216,16 @@ class RunStorageTest(unittest.TestCase):
         self.assertFalse(storage.cleanup_media(self.run, now=2_000.0 + storage.RETENTION_SECONDS - 1))
         self.assertTrue(storage.cleanup_media(self.run, now=2_000.0 + storage.RETENTION_SECONDS))
 
+    def test_migration_retention_epoch_overrides_old_real_completion_time(self) -> None:
+        self.completed_run(completed_at=1_000.0)
+        raw = self.run / "raw.mp4"
+        raw.write_bytes(b"raw")
+        storage.generate_manifest(self.run, retention_started_at="1970-01-01T00:33:20+00:00")
+
+        self.assertFalse(storage.cleanup_media(self.run, now=2_000.0 + storage.RETENTION_SECONDS - 1))
+        self.assertTrue(raw.exists())
+        self.assertTrue(storage.cleanup_media(self.run, now=2_000.0 + storage.RETENTION_SECONDS))
+
     def test_chunk_cleanup_exact_name_and_keep_flag(self) -> None:
         audio = self.run / "audio-chunks"
         audio.mkdir()

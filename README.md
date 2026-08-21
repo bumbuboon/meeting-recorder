@@ -68,6 +68,8 @@ mtg open 20260821-154836
 
 Every command accepts `--json`. Queries of three or more Unicode characters use FTS5 trigram search; one- and two-character queries use escaped literal `LIKE` matching.
 
+Existing runs can be prepared with the bundled `migrate_runs.py`, which adds manifests and rebuilds the index without moving or deleting run files. Add `--publish` only when `MEETING_VAULT_DIR` points to the intended vault. Migration is intentionally not run by the build.
+
 ## Tests
 
 ```bash

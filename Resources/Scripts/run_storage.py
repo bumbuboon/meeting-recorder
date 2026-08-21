@@ -282,12 +282,14 @@ def _cleanup_media_locked(run_dir: Path, *, now: float | None = None) -> bool:
     completed_at = event_timestamp(folded["postprocess"])
     retention_value = manifest.get("retention_started_at")
     retention_at = None
-    if completed_at is None and isinstance(retention_value, str):
+    if isinstance(retention_value, str):
         try:
             retention_at = datetime.fromisoformat(retention_value.replace("Z", "+00:00")).timestamp()
         except ValueError:
             pass
-    threshold = completed_at if completed_at is not None else retention_at
+    # Migration explicitly starts a fresh seven-day window. Legacy completion
+    # timestamps may be real and much older, but must not override that window.
+    threshold = retention_at if retention_at is not None else completed_at
     current = time.time() if now is None else now
     if threshold is None or current - threshold < RETENTION_SECONDS:
         return False
