@@ -115,8 +115,12 @@ class ResumeScanTest(unittest.TestCase):
 
     def test_runner_wraps_postprocess_in_caffeinate_i(self) -> None:
         run = self.make_ready_run()
+        minutes = run / "minutes/new/minutes.md"
+        minutes.parent.mkdir(parents=True)
+        minutes.write_text("# title\n", encoding="utf-8")
         with mock.patch.object(runner_module.subprocess, "run") as execute:
             execute.return_value.returncode = 0
+            execute.return_value.stdout = str(minutes) + "\n"
             status = runner_module.run_postprocess(
                 run,
                 self.base / "postprocess.sh",
@@ -166,7 +170,11 @@ class ResumeScanTest(unittest.TestCase):
 
         with mock.patch.object(runner_module, "resume_transcription", side_effect=worker_finished), \
              mock.patch.object(runner_module.subprocess, "run") as execute:
+            minutes = run / "minutes/new/minutes.md"
+            minutes.parent.mkdir(parents=True)
+            minutes.write_text("# title\n", encoding="utf-8")
             execute.return_value.returncode = 0
+            execute.return_value.stdout = str(minutes) + "\n"
             status = runner_module.run_postprocess(
                 run,
                 self.base / "postprocess.sh",
@@ -177,6 +185,34 @@ class ResumeScanTest(unittest.TestCase):
         self.assertEqual(status, 0)
         events = runner_module.transcription.read_jsonl(run / "chunks/postprocess.events.jsonl")
         self.assertEqual([event["event"] for event in events], ["postprocess_started", "postprocess_completed"])
+        completed = next(event for event in events if event["event"] == "postprocess_completed")
+        self.assertEqual(completed["canonical_minutes"], "minutes/new/minutes.md")
+        self.assertTrue((run / "manifest.json").is_file())
+
+    def test_manifest_failure_does_not_roll_back_durable_core_completion(self) -> None:
+        run = self.make_ready_run()
+        minutes = run / "minutes/new/minutes.md"
+        minutes.parent.mkdir(parents=True)
+        minutes.write_text("# title\n", encoding="utf-8")
+        with mock.patch.object(runner_module.subprocess, "run") as execute, \
+             mock.patch.object(runner_module.storage, "generate_manifest", side_effect=OSError("disk full")):
+            execute.return_value.returncode = 0
+            execute.return_value.stdout = str(minutes) + "\n"
+            execute.return_value.stderr = ""
+            status = runner_module.run_postprocess(
+                run,
+                self.base / "postprocess.sh",
+                self.base / "worker.py",
+                resume=False,
+                caffeinate=Path("/usr/bin/caffeinate"),
+            )
+        self.assertEqual(status, 0)
+        events = runner_module.transcription.read_jsonl(run / "chunks/postprocess.events.jsonl")
+        self.assertEqual(
+            [event["event"] for event in events],
+            ["postprocess_started", "postprocess_completed", "manifest_failed"],
+        )
+        self.assertEqual(scan_module.classify_run(run), "skip:completed")
 
 
 if __name__ == "__main__":

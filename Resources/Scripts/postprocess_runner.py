@@ -15,6 +15,7 @@ import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import transcriber_worker as transcription
+import run_storage as storage
 
 
 def append_event(path: Path, event: str, **fields: object) -> None:
@@ -24,6 +25,7 @@ def append_event(path: Path, event: str, **fields: object) -> None:
         "event": event,
         "event_id": str(uuid.uuid4()),
         "occurred_at_unix": time.time(),
+        "occurred_at": storage.iso_timestamp(time.time()),
         "pid": os.getpid(),
         **fields,
     }
@@ -126,12 +128,25 @@ def run_postprocess(
         append_event(event_path, "postprocess_started", resume=resume)
         command = [str(caffeinate), "-i", "/bin/bash", str(postprocess_script), str(run_dir)]
         try:
-            status = subprocess.run(command, check=False).returncode
+            result = subprocess.run(command, check=False, capture_output=True, text=True)
+            status = result.returncode
+            if isinstance(result.stderr, str) and result.stderr:
+                sys.stderr.write(result.stderr)
         except OSError as error:
             append_event(event_path, "postprocess_failed", stage="launch", message=str(error))
             return 70
         if status == 0:
-            append_event(event_path, "postprocess_completed", resume=resume)
+            lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+            try:
+                canonical = storage.contained_relative(run_dir, Path(lines[-1]))
+            except (IndexError, OSError, ValueError) as error:
+                append_event(event_path, "postprocess_failed", stage="canonical_minutes", message=str(error))
+                return 1
+            append_event(event_path, "postprocess_completed", resume=resume, canonical_minutes=canonical)
+            try:
+                storage.generate_manifest(run_dir, canonical_minutes=run_dir / canonical)
+            except (OSError, ValueError) as error:
+                append_event(event_path, "manifest_failed", message=str(error))
         else:
             append_event(event_path, "postprocess_failed", stage="minutes", exit_code=status)
         return status

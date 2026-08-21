@@ -30,13 +30,13 @@ for dependency in ffmpeg ffprobe python3; do
   fi
 done
 
-if python3 "$SCRIPT_DIR/video_meeting_minutes.py" "$raw" \
+if md=$(python3 "$SCRIPT_DIR/video_meeting_minutes.py" "$raw" \
     --out "$run_dir/minutes" \
     --transcript "$transcript" \
     --interpret-cmd "\"$SCRIPT_DIR/interpret_codex.sh\" \"{prompt}\" \"{out}\"" \
     --interpret-planned-frames \
-    >"$run_dir/minutes.log" 2>&1; then
-  md=$(find "$run_dir/minutes" -name minutes.md -type f -print -quit)
+    2>"$run_dir/minutes.log"); then
+  printf '%s\n' "$md" >>"$run_dir/minutes.log"
   if [ -z "$md" ] || [ ! -s "$md" ]; then
     notify "エラー" "議事録ファイルが生成されませんでした"
     echo "minutes.md was not generated" >&2
@@ -44,6 +44,7 @@ if python3 "$SCRIPT_DIR/video_meeting_minutes.py" "$raw" \
   fi
   notify "完了" "議事録ができました: ${md#$HOME/}"
   /usr/bin/open -R "$md" >/dev/null 2>&1 || true
+  printf '%s\n' "$md"
 else
   notify "エラー" "議事録生成に失敗。$run_dir/minutes.log を確認してください"
   exit 1

@@ -10,6 +10,9 @@ import subprocess
 import sys
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import run_storage as storage
+
 
 TERMINAL_EVENTS = {"finalization_failed", "finalized_media_invalid", "capture_empty"}
 
@@ -31,32 +34,16 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def classify_run(run_dir: Path) -> str:
-    lifecycle = read_jsonl(run_dir / "events.jsonl")
-    postprocess = read_jsonl(run_dir / "chunks/postprocess.events.jsonl")
-    lifecycle_events = [record.get("event") for record in lifecycle]
-    postprocess_events = [record.get("event") for record in postprocess]
-
-    finalization_state = next(
-        (event for event in reversed(lifecycle_events) if event in TERMINAL_EVENTS | {"recording_finalized"}),
-        None,
-    )
-    if finalization_state in TERMINAL_EVENTS:
-        terminal = str(finalization_state)
+    folded = storage.fold_run(run_dir)
+    state = folded["state"]
+    if state in TERMINAL_EVENTS:
+        terminal = str(state)
         return f"terminal:{terminal}"
-    if finalization_state != "recording_finalized":
+    if state == "recording":
         return "skip:not_finalized"
-    postprocess_state = next(
-        (event for event in reversed(postprocess_events) if event in {"postprocess_started", "postprocess_completed", "postprocess_failed"}),
-        None,
-    )
-    if postprocess_state is None:
-        postprocess_state = next(
-            (event for event in reversed(lifecycle_events) if event in {"postprocess_started", "postprocess_completed", "postprocess_failed"}),
-            None,
-        )
-    if postprocess_state == "postprocess_completed":
+    if state == "completed":
         return "skip:completed"
-    if postprocess_state == "postprocess_failed":
+    if state == "postprocess_failed":
         return "resume:failed"
     return "resume:interrupted"
 
@@ -81,8 +68,9 @@ def scan(base_dir: Path, runner_script: Path) -> dict[str, str]:
     if not base_dir.is_dir():
         return outcomes
     for run_dir in sorted((path for path in base_dir.iterdir() if path.is_dir() and path.name != ".state")):
+        maintenance = storage.repair_manifest(run_dir)
         classification = classify_run(run_dir)
-        outcomes[run_dir.name] = classification
+        outcomes[run_dir.name] = maintenance if maintenance != "maintenance:ok" else classification
         if classification.startswith("terminal:"):
             notify_terminal(run_dir, classification.removeprefix("terminal:"))
             continue
