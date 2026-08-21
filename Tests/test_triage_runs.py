@@ -214,6 +214,25 @@ output.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
         self.assertEqual(result["runs"][run.name]["status"], "skipped_locked")
         self.assertEqual((run / "manifest.json").read_bytes(), before)
 
+    def test_reused_keep_result_preserves_user_override(self) -> None:
+        run = self.make_run("20260821-173000", ["実会議について十分に長い相談内容です。"])
+        manifest = json.loads((run / "manifest.json").read_text(encoding="utf-8"))
+        manifest.update(
+            title="ユーザーが保持した録音",
+            disposition="keep",
+            confidence=0.99,
+            reason="Obsidianで保持に変更済みです",
+            disposition_override="keep",
+            disposition_flagged_at=None,
+        )
+        (run / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+        result = triage_runs.triage(self.base, codex="must-not-run")
+
+        self.assertEqual(result["runs"][run.name]["status"], "unchanged")
+        updated = json.loads((run / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(updated["disposition_override"], "keep")
+
     def test_timeout_setting_and_schema_are_validated_before_codex(self) -> None:
         run = self.make_run("20260821-180000", ["実会議について十分に長い相談内容が文字起こしされています。"])
         old = os.environ.get("MEETING_CODEX_TIMEOUT_SECONDS")

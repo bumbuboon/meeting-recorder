@@ -280,7 +280,7 @@ def triage(base_dir: Path, *, vault: Path | None = None, codex: str = "codex", s
                 result = classify(run_dir, transcript_segments(run_dir, manifest), codex=codex, schema=schema_path)
             run_id = str(manifest.get("run_id") or run_dir.name)
             relative = reconcile_note(vault, run_id, result)
-            run_storage.apply_triage(manifest, result)
+            run_storage.apply_triage(manifest, result, preserve_override=reused)
             manifest["manifest_schema_version"] = run_storage.MANIFEST_SCHEMA_VERSION
             if relative is not None:
                 manifest["vault_note"] = relative

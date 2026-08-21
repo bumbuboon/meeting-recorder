@@ -141,6 +141,24 @@ class TrashCleanupTest(unittest.TestCase):
         self.assertEqual(outcomes[tombstone.name], "deleted")
         self.assertFalse(tombstone.exists())
 
+    def test_cancelled_index_sync_retries_on_next_start(self) -> None:
+        run = self.make_run("20260822-130000", status=None)
+        mtg_index.rebuild_index(self.base)
+        with mock.patch.object(trash_cleanup.mtg_index, "update_index_for_run", side_effect=OSError("index busy")):
+            with self.assertRaises(OSError):
+                trash_cleanup.cleanup_run(run, now=1_000.0 + trash_cleanup.TRASH_SECONDS)
+
+        pending = run_storage.read_manifest(run)
+        self.assertEqual(pending["disposition"], "keep")
+        self.assertTrue(pending["index_sync_pending"])
+        self.assertEqual(trash_cleanup.cleanup_run(run, now=1_000.0 + trash_cleanup.TRASH_SECONDS), "not_eligible")
+        self.assertNotIn("index_sync_pending", run_storage.read_manifest(run))
+        with sqlite3.connect(self.base / "index.db") as connection:
+            self.assertEqual(
+                connection.execute("SELECT disposition FROM runs WHERE run_id = ?", (run.name,)).fetchone()[0],
+                "keep",
+            )
+
     def test_unmarked_lookalike_tombstone_is_never_deleted(self) -> None:
         lookalike = self.base / ".trash-unrelated.deleting"
         lookalike.mkdir()

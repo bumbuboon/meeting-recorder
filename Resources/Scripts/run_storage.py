@@ -291,6 +291,8 @@ def generate_manifest(
     }
     if previous.get("disposition_override") == "keep":
         manifest["disposition_override"] = "keep"
+    if previous.get("index_sync_pending") is True:
+        manifest["index_sync_pending"] = True
     result = None
     if previous.get("disposition_override") == "keep" and all(
         key in previous for key in meeting_triage.MANIFEST_KEYS

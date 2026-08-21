@@ -86,7 +86,40 @@ def _cancel(manifest_path: Path, manifest: dict[str, Any]) -> None:
     manifest["disposition"] = "keep"
     manifest["disposition_flagged_at"] = None
     manifest["disposition_override"] = "keep"
+    manifest["index_sync_pending"] = True
     run_storage.atomic_json(manifest_path, manifest)
+
+
+def _sync_pending_index(run_dir: Path) -> None:
+    manifest = run_storage.read_manifest(run_dir)
+    if manifest.get("index_sync_pending") is not True:
+        return
+    mtg_index.update_index_for_run(run_dir.parent, run_dir)
+    manifest = run_storage.read_manifest(run_dir)
+    manifest.pop("index_sync_pending", None)
+    run_storage.atomic_json(run_dir / "manifest.json", manifest)
+
+
+def _clear_cancelled_marker(run_dir: Path, manifest: dict[str, Any]) -> None:
+    marker_path = run_dir / MARKER_NAME
+    if not marker_path.exists():
+        return
+    if marker_path.is_symlink() or not marker_path.is_file():
+        raise ValueError("restored trash marker is unsafe")
+    try:
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError("restored trash marker is invalid") from error
+    if (
+        not isinstance(marker, dict)
+        or marker.get("schema") != "meeting-recorder.trash-tombstone.v1"
+        or marker.get("original_name") != run_dir.name
+        or marker.get("run_id") != str(manifest.get("run_id") or "")
+        or marker.get("external_completed") is not False
+    ):
+        raise ValueError("restored trash marker does not match the run")
+    marker_path.unlink()
+    _fsync_directory(run_dir)
 
 
 def _remove_vault_artifacts(vault: Path | None, manifest: dict[str, Any], note: Path | None) -> None:
@@ -179,13 +212,13 @@ def _finish_tombstone(tombstone: Path, *, vault: Path | None) -> str:
     note = _candidate_note(resolved_vault, manifest)
     if note is not None and _note_status(note) != "trash_candidate":
         _cancel(tombstone / "manifest.json", manifest)
-        (tombstone / MARKER_NAME).unlink()
         restored = tombstone.parent / original_name
         if restored.exists():
             raise FileExistsError(f"cannot restore cancelled run: {restored}")
         os.replace(tombstone, restored)
         _fsync_directory(restored.parent)
-        mtg_index.update_index_for_run(restored.parent, restored)
+        _clear_cancelled_marker(restored, run_storage.read_manifest(restored))
+        _sync_pending_index(restored)
         return "cancelled"
     _remove_vault_artifacts(resolved_vault, manifest, note)
     mtg_index.delete_index_run(tombstone.parent, original_name)
@@ -202,6 +235,9 @@ def cleanup_run(run_dir: Path, *, vault: Path | None = None, now: float | None =
     base = run_dir.parent.resolve(strict=True)
     if run_dir.resolve(strict=True).parent != base:
         return "not_eligible"
+    manifest = run_storage.read_manifest(run_dir)
+    _clear_cancelled_marker(run_dir, manifest)
+    _sync_pending_index(run_dir)
     manifest = run_storage.read_manifest(run_dir)
     flagged_at = _timestamp(manifest.get("disposition_flagged_at"))
     current = time.time() if now is None else now
@@ -229,7 +265,7 @@ def cleanup_run(run_dir: Path, *, vault: Path | None = None, now: float | None =
         note = _candidate_note(resolved_vault, manifest)
         if note is not None and _note_status(note) != "trash_candidate":
             _cancel(run_dir / "manifest.json", manifest)
-            mtg_index.update_index_for_run(base, run_dir)
+            _sync_pending_index(run_dir)
             return "cancelled"
         tombstone = base / f"{TOMBSTONE_PREFIX}{run_dir.name}{TOMBSTONE_SUFFIX}"
         if tombstone.exists():
