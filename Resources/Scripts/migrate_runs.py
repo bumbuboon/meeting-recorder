@@ -8,12 +8,54 @@ import datetime as dt
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
+import tempfile
 from typing import Any
 
 import mtg_index
 import obsidian_publish
 import run_storage as storage
+
+
+def _legacy_transcript(run_dir: Path) -> Path | None:
+    candidates = [
+        path
+        for pattern in ("*/transcript.json", "*/transcript_import.json")
+        for path in (run_dir / "minutes").glob(pattern)
+        if path.is_file() and not path.is_symlink()
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: (path.stat().st_mtime_ns, str(path)))
+
+
+def _adopt_legacy_transcript(run_dir: Path) -> Path | None:
+    canonical = run_dir / "chunks/transcript.json"
+    if canonical.is_file() and not canonical.is_symlink():
+        return canonical
+    legacy = _legacy_transcript(run_dir)
+    if legacy is None:
+        return None
+    canonical.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=".transcript.", suffix=".tmp", dir=canonical.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as destination, legacy.open("rb") as source:
+            shutil.copyfileobj(source, destination)
+            destination.flush()
+            os.fsync(destination.fileno())
+        os.replace(temporary, canonical)
+        directory_descriptor = os.open(canonical.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return canonical
 
 
 def migrate_run(
@@ -24,6 +66,12 @@ def migrate_run(
 ) -> dict[str, Any]:
     if mtg_index.is_active_run(run_dir):
         return {"status": "excluded_active"}
+    transcript = _adopt_legacy_transcript(run_dir)
+    if transcript is None:
+        return {
+            "status": "skipped_missing_transcript",
+            "warning": "no chunks/transcript.json or legacy minutes transcript found",
+        }
     previous = storage.read_manifest(run_dir)
     _, minutes = mtg_index.artifact_paths(run_dir, previous)
     retention = previous.get("retention_started_at")
@@ -96,6 +144,9 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as error:
         print(f"migration failed: {error}", file=sys.stderr)
         return 1
+    for run_id, outcome in result["runs"].items():
+        if warning := outcome.get("warning"):
+            print(f"warning: {run_id}: {warning}", file=sys.stderr)
     if args.json:
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     else:

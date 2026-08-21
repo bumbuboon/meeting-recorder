@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -91,6 +92,48 @@ class MigrateRunsTest(unittest.TestCase):
         self.assertIsInstance(relative, str)
         self.assertTrue((vault / relative).is_file())
         self.assertTrue((legacy / "raw.mp4").is_file())
+
+    def test_latest_legacy_minutes_transcript_is_adopted_for_index_and_publish(self) -> None:
+        legacy = self.make_legacy("20260820-100000")
+        (legacy / "chunks/transcript.json").unlink()
+        older = legacy / "minutes/older/transcript.json"
+        older.parent.mkdir(parents=True)
+        older.write_text(json.dumps({"segments": [{"text": "古い文字起こし"}]}), encoding="utf-8")
+        newest = legacy / "minutes/newest/transcript_import.json"
+        newest.parent.mkdir(parents=True)
+        newest.write_text(json.dumps({"segments": [{"text": "救済された文字起こし"}]}), encoding="utf-8")
+        os.utime(older, ns=(1_000, 1_000))
+        os.utime(newest, ns=(2_000, 2_000))
+        vault = Path(self.temporary.name) / "vault"
+        vault.mkdir()
+
+        result = migrate_runs.migrate(self.base, vault=vault)
+
+        outcome = result["runs"][legacy.name]
+        self.assertEqual(outcome["status"], "migrated")
+        adopted = legacy / "chunks/transcript.json"
+        self.assertEqual(json.loads(adopted.read_text()), json.loads(newest.read_text()))
+        self.assertEqual(run_storage.read_manifest(legacy)["artifacts"]["transcript"], "chunks/transcript.json")
+        note = (vault / outcome["vault_note"]).read_text(encoding="utf-8")
+        self.assertIn(adopted.resolve().as_uri(), note)
+        with migrate_runs.mtg_index.connect_index(self.base) as connection:
+            content = connection.execute(
+                "SELECT content FROM documents WHERE run_id = ? AND kind = 'transcript'",
+                (legacy.name,),
+            ).fetchone()[0]
+        self.assertEqual(content, "救済された文字起こし")
+
+    def test_missing_all_transcripts_warns_and_skips_with_success_exit(self) -> None:
+        legacy = self.make_legacy("20260820-100000")
+        (legacy / "chunks/transcript.json").unlink()
+
+        result = migrate_runs.migrate(self.base)
+
+        self.assertEqual(result["runs"][legacy.name]["status"], "skipped_missing_transcript")
+        self.assertIn("warning", result["runs"][legacy.name])
+        self.assertFalse((legacy / "manifest.json").exists())
+        with mock.patch.object(migrate_runs, "migrate", return_value=result):
+            self.assertEqual(migrate_runs.main(["--base-dir", str(self.base)]), 0)
 
 
 if __name__ == "__main__":
