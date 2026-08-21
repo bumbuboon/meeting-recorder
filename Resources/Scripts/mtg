@@ -1,0 +1,185 @@
+#!/usr/bin/env python3
+"""Browse and search Meeting Recorder history."""
+
+from __future__ import annotations
+
+import argparse
+from contextlib import closing
+import json
+import os
+from pathlib import Path
+import sqlite3
+import subprocess
+import sys
+from typing import Any
+
+import mtg_index
+
+
+RUN_COLUMNS = "run_id, run_path, started_at, completed_at, duration_seconds, state, title, transcript_path, minutes_path, vault_note"
+
+
+def default_base_dir() -> Path:
+    configured = os.environ.get("MEETING_RECORD_DIR")
+    return Path(configured).expanduser() if configured else Path.home() / "Movies/meeting-recordings"
+
+
+def row_dict(row: sqlite3.Row) -> dict[str, Any]:
+    return {key: row[key] for key in row.keys()}
+
+
+def emit(value: Any, json_output: bool) -> None:
+    if json_output:
+        print(json.dumps(value, ensure_ascii=False, sort_keys=True))
+        return
+    if isinstance(value, list):
+        for item in value:
+            print("\t".join(str(item.get(key) or "") for key in ("run_id", "started_at", "state", "title")))
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            print(f"{key}: {item if item is not None else ''}")
+    else:
+        print(value)
+
+
+def resolve_run(connection: sqlite3.Connection, selector: str) -> sqlite3.Row:
+    exact = connection.execute(f"SELECT {RUN_COLUMNS} FROM runs WHERE run_id = ?", (selector,)).fetchone()
+    if exact is not None:
+        return exact
+    prefix = selector.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+    matches = connection.execute(
+        f"SELECT {RUN_COLUMNS} FROM runs WHERE run_id LIKE ? ESCAPE '\\' ORDER BY run_id", (prefix,)
+    ).fetchall()
+    if not matches:
+        raise ValueError(f"run not found: {selector}")
+    if len(matches) > 1:
+        raise ValueError(f"run selector is ambiguous: {selector}")
+    return matches[0]
+
+
+def command_list(base_dir: Path, args: argparse.Namespace) -> int:
+    with closing(mtg_index.connect_index(base_dir)) as connection:
+        rows = connection.execute(
+            f"SELECT {RUN_COLUMNS} FROM runs ORDER BY COALESCE(started_at, run_id) DESC LIMIT ?",
+            (args.limit,),
+        ).fetchall()
+    emit([row_dict(row) for row in rows], args.json)
+    return 0
+
+
+def command_show(base_dir: Path, args: argparse.Namespace) -> int:
+    with closing(mtg_index.connect_index(base_dir)) as connection:
+        value = row_dict(resolve_run(connection, args.run))
+    emit(value, args.json)
+    return 0
+
+
+def command_search(base_dir: Path, args: argparse.Namespace) -> int:
+    query = args.query
+    if not query:
+        raise ValueError("query must not be empty")
+    with closing(mtg_index.connect_index(base_dir)) as connection:
+        if len(query) >= 3:
+            rows = connection.execute(
+                """SELECT r.run_id, r.started_at, r.title, f.kind,
+                          snippet(documents_fts, 2, '[', ']', ' … ', 24) AS snippet
+                   FROM documents_fts AS f JOIN runs AS r ON r.run_id=f.run_id
+                   WHERE documents_fts MATCH ?
+                   ORDER BY COALESCE(r.started_at, r.run_id) DESC, f.kind""",
+                (mtg_index.fts_literal_query(query),),
+            ).fetchall()
+            method = "fts5_trigram"
+        else:
+            rows = connection.execute(
+                """SELECT r.run_id, r.started_at, r.title, d.kind,
+                          substr(d.content, max(1, instr(d.content, ?) - 20), 80) AS snippet
+                   FROM documents AS d JOIN runs AS r ON r.run_id=d.run_id
+                   WHERE d.content LIKE ? ESCAPE '\\'
+                   ORDER BY COALESCE(r.started_at, r.run_id) DESC, d.kind""",
+                (query, mtg_index.literal_like_pattern(query)),
+            ).fetchall()
+            method = "literal_like"
+    results = [row_dict(row) for row in rows]
+    if args.json:
+        emit({"query": query, "method": method, "results": results}, True)
+    else:
+        for result in results:
+            print(f"{result['run_id']}\t{result['kind']}\t{result['title']}\t{result['snippet']}")
+    return 0
+
+
+def command_open(base_dir: Path, args: argparse.Namespace) -> int:
+    with closing(mtg_index.connect_index(base_dir)) as connection:
+        run = row_dict(resolve_run(connection, args.run))
+    target = run.get("minutes_path") or run["run_path"]
+    vault_note = run.get("vault_note")
+    if vault_note:
+        note_path = Path(vault_note).expanduser()
+        if note_path.is_absolute():
+            target = str(note_path)
+        elif os.environ.get("MEETING_VAULT_DIR"):
+            target = str(Path(os.environ["MEETING_VAULT_DIR"]).expanduser() / note_path)
+    status = subprocess.run(["/usr/bin/open", str(target)], check=False).returncode
+    result = {"run_id": run["run_id"], "target": str(target), "exit_code": status}
+    emit(result, args.json)
+    return status
+
+
+def command_index(base_dir: Path, args: argparse.Namespace) -> int:
+    if not args.rebuild:
+        raise ValueError("index currently requires --rebuild")
+    mtg_index.check_fts5_trigram()
+    result = mtg_index.rebuild_index(base_dir)
+    result.update({"index": str(base_dir / mtg_index.INDEX_FILENAME), "schema_version": mtg_index.INDEX_SCHEMA_VERSION})
+    emit(result, args.json)
+    return 0
+
+
+def parser() -> argparse.ArgumentParser:
+    root = argparse.ArgumentParser(description=__doc__)
+    root.add_argument("--base-dir", type=Path, default=default_base_dir())
+    root.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    commands = root.add_subparsers(dest="command", required=True)
+
+    list_parser = commands.add_parser("list")
+    list_parser.add_argument("--limit", type=int, default=50)
+    list_parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+    list_parser.set_defaults(handler=command_list)
+
+    show_parser = commands.add_parser("show")
+    show_parser.add_argument("run")
+    show_parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+    show_parser.set_defaults(handler=command_show)
+
+    search_parser = commands.add_parser("search")
+    search_parser.add_argument("query")
+    search_parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+    search_parser.set_defaults(handler=command_search)
+
+    open_parser = commands.add_parser("open")
+    open_parser.add_argument("run")
+    open_parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+    open_parser.set_defaults(handler=command_open)
+
+    index_parser = commands.add_parser("index")
+    index_parser.add_argument("--rebuild", action="store_true")
+    index_parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+    index_parser.set_defaults(handler=command_index)
+    return root
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parser().parse_args(argv)
+    base_dir = args.base_dir.expanduser().resolve()
+    try:
+        return args.handler(base_dir, args)
+    except (ValueError, OSError, sqlite3.Error, mtg_index.IndexUnavailable) as error:
+        if getattr(args, "json", False):
+            print(json.dumps({"error": str(error), "type": type(error).__name__}, ensure_ascii=False))
+        else:
+            print(f"mtg: {error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

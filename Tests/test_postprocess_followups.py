@@ -70,8 +70,8 @@ class PostprocessFollowupsTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"MEETING_VAULT_DIR": str(self.vault)}):
             outcome = followups.run_followups(self.run)
             again = followups.run_followups(self.run)
-        self.assertEqual(outcome, {"publish": "completed"})
-        self.assertEqual(again, {"publish": "skipped"})
+        self.assertEqual(outcome, {"publish": "completed", "index": "completed"})
+        self.assertEqual(again, {"publish": "skipped", "index": "skipped"})
         manifest = storage.read_manifest(self.run)
         note = self.vault / manifest["vault_note"]
         self.assertTrue(note.is_file())
@@ -80,13 +80,14 @@ class PostprocessFollowupsTest(unittest.TestCase):
             note.read_text(encoding="utf-8"),
         )
         events = storage.read_jsonl(self.run / "chunks/postprocess.events.jsonl")
-        self.assertEqual(events[-1]["event"], "publish_completed")
+        self.assertEqual([record["event"] for record in events[-2:]], ["publish_completed", "index_completed"])
+        self.assertTrue((self.base / "index.db").is_file())
 
     def test_publish_failure_is_isolated_and_retried(self) -> None:
         with mock.patch.dict(os.environ, {"MEETING_VAULT_DIR": str(self.vault)}), \
              mock.patch.object(followups.obsidian_publish, "publish", side_effect=OSError("vault offline")):
             failed = followups.run_followups(self.run)
-        self.assertEqual(failed, {"publish": "failed"})
+        self.assertEqual(failed, {"publish": "failed", "index": "completed"})
         self.assertEqual(storage.fold_run(self.run)["state"], "completed")
         events = storage.read_jsonl(self.run / "chunks/postprocess.events.jsonl")
         self.assertIn("publish_failed", [record["event"] for record in events])
@@ -94,6 +95,7 @@ class PostprocessFollowupsTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"MEETING_VAULT_DIR": str(self.vault)}):
             retried = followups.run_followups(self.run)
         self.assertEqual(retried["publish"], "completed")
+        self.assertEqual(retried["index"], "skipped")
 
     def test_unset_vault_skips_publish_without_failure(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=True):
@@ -101,6 +103,21 @@ class PostprocessFollowupsTest(unittest.TestCase):
         self.assertEqual(outcome["publish"], "skipped")
         events = storage.read_jsonl(self.run / "chunks/postprocess.events.jsonl")
         self.assertNotIn("publish_failed", [record["event"] for record in events])
+
+    def test_index_failure_is_warning_only_and_retried(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True), \
+             mock.patch.object(followups.mtg_index, "ensure_index", side_effect=OSError("index full")):
+            failed = followups.run_followups(self.run)
+        self.assertEqual(failed["index"], "failed")
+        self.assertEqual(storage.fold_run(self.run)["state"], "completed")
+        self.assertIn(
+            "index_failed",
+            [record["event"] for record in storage.read_jsonl(self.run / "chunks/postprocess.events.jsonl")],
+        )
+
+        with mock.patch.dict(os.environ, {}, clear=True):
+            retried = followups.run_followups(self.run)
+        self.assertEqual(retried["index"], "completed")
 
 if __name__ == "__main__":
     unittest.main()

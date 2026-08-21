@@ -26,7 +26,7 @@ ScreenCaptureKit ──► raw.mp4 (screen + system audio + mic, finalized on st
 
 ## Requirements
 
-- macOS 15+ (Apple Silicon), Screen & System Audio Recording permission
+- macOS 26+ (Apple Silicon), Screen & System Audio Recording permission
 - `kanary` CLI on PATH (bundled with the Kanary app; symlink `Kanary.app/Contents/Helpers/kanary` into `~/.local/bin`)
 - `ffmpeg`, `ffprobe`, `python3`
 - `codex` CLI (optional — minutes fall back to rule-based sections without it)
@@ -43,11 +43,30 @@ Installs `Meeting Recorder.app` into `~/Applications`. Launching the app starts 
 
 Each run is written under `~/Movies/meeting-recordings/<timestamp>/`:
 
-- `raw.mp4` — original three-track recording (never post-processed in place)
-- `audio-chunks/` — 120 s WAV chunks produced during recording
+- `raw.mp4` — original three-track recording (never post-processed in place; deleted after 7 days once minutes are durably complete)
+- `audio-chunks/` — 120 s WAV chunks produced during recording and removed after each durable transcript success (`MEETING_KEEP_CHUNK_WAV=1` keeps them)
 - `chunks/` — per-chunk transcripts, merged `transcript.json`, event logs, handshake markers
 - `minutes/<run-id>/minutes.md` + `images/` — generated minutes with screenshots
+- `manifest.json` — atomic run summary with canonical artifact paths and retention state
 - `recorder.log`, `events.jsonl`, `minutes.log` — logs and structured events
+
+The run bundles are the source of truth. `<base>/index.db` is a derived SQLite/FTS5 index and can always be rebuilt. Set `MEETING_RECORD_DIR` to override the default base (`~/Movies/meeting-recordings`). Set `MEETING_VAULT_DIR` to publish read-only-by-convention copies under `Meetings/YYYY/` in an Obsidian vault; the transcript remains only in the run bundle.
+
+## Search CLI
+
+The app bundles `mtg`, a Python-stdlib-only history CLI. Install a convenient symlink after building:
+
+```bash
+mkdir -p "$HOME/.local/bin"
+ln -sfn "$HOME/Applications/Meeting Recorder.app/Contents/Resources/Scripts/mtg" "$HOME/.local/bin/mtg"
+mtg index --rebuild
+mtg list
+mtg show 20260821-154836
+mtg search 日本語
+mtg open 20260821-154836
+```
+
+Every command accepts `--json`. Queries of three or more Unicode characters use FTS5 trigram search; one- and two-character queries use escaped literal `LIKE` matching.
 
 ## Tests
 

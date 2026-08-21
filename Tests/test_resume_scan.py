@@ -184,7 +184,10 @@ class ResumeScanTest(unittest.TestCase):
             )
         self.assertEqual(status, 0)
         events = runner_module.transcription.read_jsonl(run / "chunks/postprocess.events.jsonl")
-        self.assertEqual([event["event"] for event in events], ["postprocess_started", "postprocess_completed"])
+        self.assertEqual(
+            [event["event"] for event in events],
+            ["postprocess_started", "postprocess_completed", "index_completed"],
+        )
         completed = next(event for event in events if event["event"] == "postprocess_completed")
         self.assertEqual(completed["canonical_minutes"], "minutes/new/minutes.md")
         self.assertTrue((run / "manifest.json").is_file())

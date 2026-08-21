@@ -11,6 +11,7 @@ import time
 from typing import Any
 import uuid
 
+import mtg_index
 import obsidian_publish
 import run_storage as storage
 
@@ -67,9 +68,9 @@ def _execute_locked(run_dir: Path) -> dict[str, str]:
     canonical = storage.canonical_minutes(run_dir, folded)
     manifest = storage.read_manifest(run_dir)
     if folded["state"] != "completed" or canonical is None or not manifest:
-        return {"publish": "skipped"}
+        return {"publish": "skipped", "index": "skipped"}
 
-    outcomes = {"publish": "skipped"}
+    outcomes = {"publish": "skipped", "index": "skipped"}
     vault_value = os.environ.get("MEETING_VAULT_DIR")
     if vault_value:
         vault = Path(vault_value).expanduser().resolve()
@@ -88,6 +89,16 @@ def _execute_locked(run_dir: Path) -> dict[str, str]:
                 append_event(event_path, "publish_failed", message=str(error))
                 outcomes["publish"] = "failed"
 
+    base_dir = run_dir.parent
+    try:
+        index_path = mtg_index.ensure_index(base_dir)
+        if not _stage_is_current(records, "index_completed"):
+            indexed = mtg_index.update_index_for_run(base_dir, run_dir)
+            append_event(event_path, "index_completed", indexed=indexed, index=str(index_path))
+            outcomes["index"] = "completed"
+    except Exception as error:  # derived index is always recoverable; never roll back core
+        append_event(event_path, "index_failed", message=str(error))
+        outcomes["index"] = "failed"
     return outcomes
 
 
@@ -102,7 +113,7 @@ def run_followups(run_dir: Path, *, lock_held: bool = False) -> dict[str, str]:
         try:
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            return {"publish": "locked"}
+            return {"publish": "locked", "index": "locked"}
         return _execute_locked(run_dir)
     finally:
         lock_handle.close()
