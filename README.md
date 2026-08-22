@@ -45,10 +45,12 @@ Each run is written under `~/Movies/meeting-recordings/<timestamp>/`:
 
 - `raw.mp4` — original three-track recording (never post-processed in place; deleted after 7 days once minutes are durably complete)
 - `audio-chunks/` — 120 s WAV chunks produced during recording and removed after each durable transcript success (`MEETING_KEEP_CHUNK_WAV=1` keeps them)
-- `chunks/` — per-chunk transcripts, merged `transcript.json`, event logs, handshake markers
-- `minutes/<run-id>/minutes.md` + `images/` — generated minutes with screenshots
+- `chunks/` — per-chunk transcripts, merged `transcript.json`, per-worker event logs, handshake markers
+- `minutes/<generation-id>/` — generated `minutes.md`, screenshots, imported transcript, interpretation artifacts, and SQLite data
 - `manifest.json` — atomic run summary with canonical artifact paths and retention state
-- `recorder.log`, `events.jsonl`, `minutes.log` — logs and structured events
+- `minutes-draft.md` — disposable rolling draft written during recording when interpretation succeeds
+- `recorder.log`, `transcriber-worker.log`, `rolling-minutes-worker.log`, `minutes.log` — recorder, worker, and minutes-generation logs
+- `events.jsonl` — run lifecycle events; `chunks/*.events.jsonl` stores recorder, transcription, rolling-minutes, and post-processing events
 
 The run bundles are the source of truth. `<base>/index.db` is a derived SQLite/FTS5 index and can always be rebuilt. Set `MEETING_RECORD_DIR` to override the default base (`~/Movies/meeting-recordings`). Set `MEETING_VAULT_DIR` to publish read-only-by-convention copies under `Meetings/YYYY/` in an Obsidian vault; the transcript remains only in the run bundle.
 
@@ -78,11 +80,11 @@ Existing runs can be prepared with the bundled `migrate_runs.py`, which adds man
 ./Tests/verify.sh
 ```
 
-Builds the app and runs the full suite: transcription-adapter fixtures (including timeout and malformed-JSON cases), worker restart/idempotency, stop-handshake contract, resume scan, and interpret fallback tests.
+Builds and signs an isolated test app bundle, validates its resources and plist, then runs the Python contract suite and the Swift `AudioChunker` watermark test. Coverage includes transcription-adapter failures, worker restart/idempotency, stop handshake, resume and retention flows, run indexing/migration, Obsidian publishing, triage, and minutes interpretation.
 
-## Design docs
+## Design notes
 
-The `docs/` directory contains the reviewed design plan (v3.2) and phase acceptance records, including the chunk-length measurements that led to 120 s chunks without overlap.
+Design notes and phase acceptance records are maintained outside this public repository.
 
 ## License
 
